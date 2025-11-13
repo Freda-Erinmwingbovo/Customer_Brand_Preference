@@ -5,7 +5,7 @@ Created on Thu Nov 13 12:03:37 2025
 @author: Freda Erinmwingbovo
 """
 
-# app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,18 +19,17 @@ import joblib
 import os
 
 # ------------------------
-# App configuration
+# App Configuration
 # ------------------------
 st.set_page_config(
     page_title="Customer Brand Preference Predictor",
     layout="wide",
     page_icon="💻"
 )
-
 sns.set_style("whitegrid")
 
 # ------------------------
-# Helper functions
+# Helper Functions
 # ------------------------
 @st.cache_data
 def load_training_data(path="CompleteResponses.csv"):
@@ -56,19 +55,29 @@ def build_or_load_model(X_train, y_train, model_path="RandomForest_BrandPreferen
         joblib.dump(model, model_path)
     return model
 
-def prepare_uploaded(df_uploaded, le_edu, le_region, education_map, region_map):
+def prepare_uploaded(df_uploaded, le_edu, le_region, education_map, region_map, df_train_prepared):
+    # Map education & region
     df_uploaded['elevel_label'] = df_uploaded['elevel'].map(education_map)
     df_uploaded['region'] = df_uploaded['zipcode'].map(region_map)
-    df_uploaded['elevel_label'] = df_uploaded['elevel_label'].fillna("Unknown")
-    df_uploaded['region'] = df_uploaded['region'].fillna("Unknown")
-    return df_uploaded
 
-def safe_transform_column(series, le):
-    s = series.copy()
-    allowed = set(le.classes_)
-    most_freq = le.classes_[0] if len(le.classes_) > 0 else None
-    s = s.apply(lambda x: x if x in allowed else most_freq)
-    return le.transform(s)
+    # Fill missing mapping with training mode
+    edu_mode = df_train_prepared['elevel_label'].mode()[0]
+    region_mode = df_train_prepared['region'].mode()[0]
+    df_uploaded['elevel_label'] = df_uploaded['elevel_label'].fillna(edu_mode)
+    df_uploaded['region'] = df_uploaded['region'].fillna(region_mode)
+
+    # Safe encoding using fitted LabelEncoders
+    df_uploaded['elevel_encoded'] = df_uploaded['elevel_label'].apply(
+        lambda x: x if x in le_edu.classes_ else edu_mode
+    )
+    df_uploaded['elevel_encoded'] = le_edu.transform(df_uploaded['elevel_encoded'])
+
+    df_uploaded['region_encoded'] = df_uploaded['region'].apply(
+        lambda x: x if x in le_region.classes_ else region_mode
+    )
+    df_uploaded['region_encoded'] = le_region.transform(df_uploaded['region_encoded'])
+
+    return df_uploaded
 
 # ------------------------
 # Fixed mappings
@@ -88,7 +97,7 @@ region_map = {
 }
 
 # ------------------------
-# Sidebar - Controls
+# Sidebar Controls
 # ------------------------
 st.sidebar.title("💼 Controls")
 st.sidebar.markdown("Upload an incomplete survey CSV to predict missing brand preferences.")
@@ -96,26 +105,22 @@ uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 train_button = st.sidebar.button("Train / Refresh Model")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Tips:**")
 st.sidebar.info("""
-- Ensure CSV has columns: salary, age, elevel, car, zipcode, credit  
+- CSV columns: salary, age, elevel, car, zipcode, credit  
 - Brand prediction: 0 = Acer, 1 = Sony
 """)
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Download Samples:**")
-st.sidebar.markdown("[Download Sample CSV](https://example.com/sample.csv)  ")  # Optional link
 
 # ------------------------
 # Header
 # ------------------------
 st.title("💻 Customer Brand Preference Predictor")
 st.markdown("""
-Welcome! This app predicts customer computer brand preference (Acer or Sony) based on survey data.  
-Upload your incomplete survey CSV to get predictions instantly.
+Welcome! Upload your incomplete survey CSV and get predictions for customer computer brand preferences instantly.
 """)
 
 # ------------------------
-# Load training data
+# Load and prepare training data
 # ------------------------
 try:
     df_train = load_training_data()
@@ -124,9 +129,6 @@ except Exception as e:
     st.error(f"Could not load CompleteResponses.csv: {e}")
     st.stop()
 
-# ------------------------
-# Prepare training data
-# ------------------------
 df_train_prepared, le_edu, le_region = fit_encoders_and_prepare(df_train.copy(), education_map, region_map)
 X = df_train_prepared[['salary', 'age', 'elevel_encoded', 'car', 'region_encoded', 'credit']]
 y = df_train_prepared['brand']
@@ -144,7 +146,7 @@ else:
     rf = build_or_load_model(X, y, model_path=model_path)
 
 # ------------------------
-# Tabs for app content
+# Tabs
 # ------------------------
 tab1, tab2, tab3 = st.tabs(["📊 Predict", "📈 Visualizations", "ℹ️ About / Contact"])
 
@@ -158,15 +160,7 @@ with tab1:
         st.subheader("Uploaded Data Preview")
         st.dataframe(df_uploaded.head())
 
-        df_uploaded = prepare_uploaded(df_uploaded, le_edu, le_region, education_map, region_map)
-        edu_mode = df_train_prepared['elevel_label'].mode()[0]
-        region_mode = df_train_prepared['region'].mode()[0]
-        df_uploaded['elevel_label'] = df_uploaded['elevel_label'].fillna(edu_mode)
-        df_uploaded['region'] = df_uploaded['region'].fillna(region_mode)
-
-        df_uploaded['elevel_encoded'] = safe_transform_column(df_uploaded['elevel_label'], le_edu)
-        df_uploaded['region_encoded'] = safe_transform_column(df_uploaded['region'], le_region)
-
+        df_uploaded = prepare_uploaded(df_uploaded, le_edu, le_region, education_map, region_map, df_train_prepared)
         X_new = df_uploaded[['salary', 'age', 'elevel_encoded', 'car', 'region_encoded', 'credit']]
         preds = rf.predict(X_new)
         df_uploaded['predicted_brand'] = preds
@@ -177,52 +171,75 @@ with tab1:
         csv = df_uploaded.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download Predictions CSV", csv, "Predicted_Survey.csv", "text/csv")
     else:
-        st.info("Upload an incomplete survey CSV to get predictions.")
+        st.info("Upload a CSV to get predictions.")
 
 # ------------------------
-# Tab 2 - Visualizations
+# Tab 2 - Visualizations (Polished & Mobile-Friendly)
 # ------------------------
 with tab2:
     st.header("Predicted Brand Visualizations")
+    
     if uploaded_file:
-        # Predicted brand distribution
-        st.subheader("Predicted Brand Distribution")
-        fig1, ax1 = plt.subplots(figsize=(6,4))
-        sns.countplot(x='predicted_brand', data=df_uploaded, palette="Set2", ax=ax1)
-        ax1.set_xlabel("Brand (0 = Acer, 1 = Sony)")
-        st.pyplot(fig1)
+        st.subheader("Brand Distribution")
+        brand_counts = df_uploaded['predicted_brand'].value_counts()
+        fig1, ax1 = plt.subplots(figsize=(4,4))  # Mobile-friendly size
+        ax1.pie(
+            brand_counts,
+            labels=['Acer', 'Sony'],
+            autopct='%1.1f%%',
+            startangle=90,
+            colors=['#FF9999','#66B2FF'],
+            wedgeprops={'edgecolor':'white'}
+        )
+        ax1.set_title("Predicted Brand Share")
+        st.pyplot(fig1, use_container_width=True)
 
-        # Feature importance
+        st.subheader("Feature Importance")
         if hasattr(rf, "feature_importances_"):
-            st.subheader("Feature Importance")
-            fi = pd.Series(rf.feature_importances_, index=X.columns).sort_values()
-            fig2, ax2 = plt.subplots(figsize=(6,4))
-            fi.plot(kind='barh', ax=ax2, color="skyblue")
-            st.pyplot(fig2)
+            fi = pd.Series(rf.feature_importances_, index=X.columns).sort_values(ascending=True)
+            fig2, ax2 = plt.subplots(figsize=(4,3))
+            fi.plot(kind='barh', ax=ax2, color=['#FFA500' if x==fi.max() else '#87CEEB' for x in fi])
+            ax2.set_xlabel("Relative Importance")
+            ax2.set_title("Top Features Influencing Prediction")
+            st.pyplot(fig2, use_container_width=True)
 
-        # Salary / Age boxplots by predicted brand
-        st.subheader("Salary and Age by Predicted Brand")
-        col1, col2 = st.columns(2)
-        with col1:
-            fig3, ax3 = plt.subplots(figsize=(6,4))
-            sns.boxplot(x='predicted_brand', y='salary', data=df_uploaded, ax=ax3)
-            ax3.set_title("Salary by Predicted Brand")
-            st.pyplot(fig3)
-        with col2:
-            fig4, ax4 = plt.subplots(figsize=(6,4))
-            sns.boxplot(x='predicted_brand', y='age', data=df_uploaded, ax=ax4)
-            ax4.set_title("Age by Predicted Brand")
-            st.pyplot(fig4)
+        st.subheader("Salary vs Age by Predicted Brand")
+        fig3, ax3 = plt.subplots(figsize=(5,4))
+        sns.boxplot(
+            x='predicted_brand',
+            y='salary',
+            data=df_uploaded,
+            palette=['#FF9999','#66B2FF'],
+            ax=ax3
+        )
+        ax3.set_xticklabels(['Acer', 'Sony'])
+        ax3.set_title("Salary Distribution by Brand")
+        st.pyplot(fig3, use_container_width=True)
 
-        # Regional summary
-        st.subheader("Summary by Region")
-        summary_region = df_uploaded.groupby('region')['predicted_brand'].value_counts().unstack().fillna(0)
-        summary_region['Total'] = summary_region.sum(axis=1)
-        summary_region['% Acer'] = (summary_region.get(0,0)/summary_region['Total']*100).round(2)
-        summary_region['% Sony'] = (summary_region.get(1,0)/summary_region['Total']*100).round(2)
-        st.dataframe(summary_region)
+        fig4, ax4 = plt.subplots(figsize=(5,4))
+        sns.boxplot(
+            x='predicted_brand',
+            y='age',
+            data=df_uploaded,
+            palette=['#FF9999','#66B2FF'],
+            ax=ax4
+        )
+        ax4.set_xticklabels(['Acer', 'Sony'])
+        ax4.set_title("Age Distribution by Brand")
+        st.pyplot(fig4, use_container_width=True)
+
+        st.subheader("Regional Summary Heatmap")
+        summary_region = df_uploaded.groupby('region')['predicted_brand'].value_counts().unstack(fill_value=0)
+        fig5, ax5 = plt.subplots(figsize=(6,4))
+        sns.heatmap(summary_region, annot=True, fmt="d", cmap="YlGnBu", ax=ax5)
+        ax5.set_ylabel("Region")
+        ax5.set_xlabel("Predicted Brand (0=Acer, 1=Sony)")
+        ax5.set_title("Predicted Brand Counts by Region")
+        st.pyplot(fig5, use_container_width=True)
+        
     else:
-        st.info("Upload a CSV to view visualizations.")
+        st.info("Upload a CSV file to see interactive visualizations.")
+
 
 # ------------------------
 # Tab 3 - About / Contact
@@ -235,11 +252,17 @@ with tab3:
     """)
     st.subheader("Contact / Portfolio")
     st.markdown("""
-    - GitHub: [🐙](https://github.com/Freda-Erinmwingbovo)  
-    - LinkedIn: [🔗 ](https://www.linkedin.com/in/freda-erinmwingbovo)  
-    - Portfolio: [🌐 ](https://yourportfolio.com)
-    - Email: engrfreda@gmail.com
-    
+- GitHub: [🐙](https://github.com/Freda-Erinmwingbovo)  
+- LinkedIn: [🔗](https://www.linkedin.com/in/freda-erinmwingbovo)  
+- Portfolio: [🌐](https://yourportfolio.com)  
+- Email: engrfreda@gmail.com
 """)
+
+
+
+
+
+
+
 
 
